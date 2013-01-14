@@ -686,7 +686,7 @@ uorb_receive_start(void)
 
 	/* --- GPS VALUE --- */
 	mavlink_subs.gps_sub = orb_subscribe(ORB_ID(vehicle_gps_position));
-	orb_set_interval(mavlink_subs.gps_sub, 1000);	/* 1Hz updates */
+	orb_set_interval(mavlink_subs.gps_sub, 200);	/* 5Hz updates */
 
 	/* --- SYSTEM STATE --- */
 	status_sub = orb_subscribe(ORB_ID(vehicle_status));
