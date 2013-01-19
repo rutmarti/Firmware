@@ -239,6 +239,7 @@ void KalmanNav::update()
 	// publication
 	if (newTimeStamp - _pubTimeStamp > 1e6 / 50) { // 50 Hz
 		_pubTimeStamp = newTimeStamp;
+
 		updatePublications();
 	}
 
@@ -291,8 +292,13 @@ void KalmanNav::updatePublications()
 	_att.q_valid = true;
 	_att.counter = _navFrames;
 
-	// update publications
-	SuperBlock::updatePublications();
+	// selectively update publications,
+	// do NOT call superblock do-all method
+	if (_positionInitialized)
+		_pos.update();
+
+	if (_attitudeInitialized)
+		_att.update();
 }
 
 int KalmanNav::predictState(float dt)
@@ -589,6 +595,7 @@ int KalmanNav::correctAtt()
 	}
 
 	psi += xCorrect(PSI);
+
 	// attitude also affects nav velocities
 	if (_positionInitialized) {
 		vN += xCorrect(VN);
