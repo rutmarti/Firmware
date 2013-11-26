@@ -53,9 +53,8 @@ struct sdlograw_buffer {
 struct sdlog_sensVect {
 	uint8_t frameStart;
 	uint32_t tstamp;
-	int16_t gyro[3];
-	int16_t accel[3];
-	int16_t mag[3];
+	int16_t data[3];
+	int16_t temp;
 	uint8_t frameStop;
 };
 #pragma pack(pop)
