@@ -77,6 +77,10 @@
 
 #include <mavlink/mavlink_log.h>
 
+#include <drivers/drv_accel.h>
+#include <drivers/drv_gyro.h>
+#include <drivers/drv_mag.h>
+
 #include "sdlograw_buffer.h"
 
 static bool thread_should_exit = false;		/**< Deamon exit flag */
@@ -174,7 +178,7 @@ int sdlograw_main(int argc, char *argv[])
 		thread_should_exit = false;
 		deamon_task = task_spawn_cmd("sdlograw",
 					 SCHED_DEFAULT,
-					 SCHED_PRIORITY_DEFAULT - 30,
+					 SCHED_PRIORITY_MAX - 80,
 					 4096,
 					 sdlograw_thread_main,
 					 (const char **)argv);
@@ -247,6 +251,7 @@ static void *sdlograw_write_thread(void *arg)
 	struct sdlograw_buffer *logbuf = (struct sdlograw_buffer *)arg;
 
 	int poll_count = 0;
+	int not_sync_cnt = 0;
 
 	uint8_t buffer[512];
 
@@ -270,7 +275,15 @@ static void *sdlograw_write_thread(void *arg)
 		if (ret)
 		{
 			sdlograw_bytes_written += write(sdlograw_file, (const char *)buffer, ret);
-			fsync(sdlograw_file);
+			if (not_sync_cnt >= 3)
+			{
+				not_sync_cnt = 0;
+				//fsync(sdlograw_file);
+			}
+			else
+			{
+				not_sync_cnt++;
+			}
 		}
 		else
 		{
@@ -300,6 +313,247 @@ pthread_t sdlograw_write_start_thread(struct sdlograw_buffer *logbuf)
 	return thread;
 }
 
+#define NEW_RAWLOG
+#ifdef NEW_RAWLOG
+enum sdlograw_datatype
+{
+	sdlograw_datatype_gyro = 0,
+	sdlograw_datatype_accel,
+	sdlograw_datatype_mag
+};
+
+static void sdlograw_write_buffer(uint8_t *pData, uint32_t dataSize)
+{
+	/* put into buffer for later IO */
+	pthread_mutex_lock(&logbuffer_mutex);
+	/* put into buffer for later IO */
+	pthread_mutex_lock(&logbuffer_mutex);
+	sdlograw_buffer_write(&lb, pData, dataSize);
+	/* signal the other thread new data, but not yet unlock */
+	if (sdlograw_buffer_cur_size(&lb) >= 512) {
+		/* only request write if several packets can be written at once */
+		pthread_cond_signal(&logbuffer_cond);
+	}
+	/* unlock, now the writer thread may run */
+	pthread_mutex_unlock(&logbuffer_mutex);
+}
+
+static int sdlograw_poll_gyro(struct pollfd *pFd)
+{
+	if (pFd->revents & POLLIN)
+	{
+		struct gyro_report report;
+		struct sdlog_sensVect logData;
+
+		orb_copy(ORB_ID(sensor_gyro), pFd->fd, &report);
+		logData.tstamp  = (uint32_t)(report.timestamp - sdlograw_starttime);
+		logData.data[0] = report.x_raw;
+		logData.data[1] = report.y_raw;
+		logData.data[2] = report.z_raw;
+		logData.temp    = report.temperature_raw;
+
+		logData.frameStart = 0xa0 | sdlograw_datatype_gyro;
+		logData.frameStop  = logData.frameStart;
+
+		sdlograw_write_buffer((uint8_t*)&logData, sizeof(logData));
+		return 1;
+	}
+	return 0;
+}
+
+static int sdlograw_poll_accel(struct pollfd *pFd)
+{
+	if (pFd->revents & POLLIN)
+	{
+		struct accel_report report;
+		struct sdlog_sensVect logData;
+
+		orb_copy(ORB_ID(sensor_accel), pFd->fd, &report);
+		logData.tstamp  = (uint32_t)(report.timestamp - sdlograw_starttime);
+		logData.data[0] = report.x_raw;
+		logData.data[1] = report.y_raw;
+		logData.data[2] = report.z_raw;
+		logData.temp    = report.temperature_raw;
+
+		logData.frameStart = 0xa0 | sdlograw_datatype_accel;
+		logData.frameStop  = logData.frameStart;
+
+		sdlograw_write_buffer((uint8_t*)&logData, sizeof(logData));
+		return 1;
+	}
+	return 0;
+}
+
+static int sdlograw_poll_mag(struct pollfd *pFd)
+{
+	if (pFd->revents & POLLIN)
+	{
+		struct mag_report report;
+		struct sdlog_sensVect logData;
+
+		orb_copy(ORB_ID(sensor_mag), pFd->fd, &report);
+		logData.tstamp  = (uint32_t)(report.timestamp - sdlograw_starttime);
+		logData.data[0] = report.x_raw;
+		logData.data[1] = report.y_raw;
+		logData.data[2] = report.z_raw;
+		logData.temp    = 0;
+
+		logData.frameStart = 0xa0 | sdlograw_datatype_mag;
+		logData.frameStop  = logData.frameStart;
+
+		sdlograw_write_buffer((uint8_t*)&logData, sizeof(logData));
+		return 1;
+	}
+	return 0;
+}
+
+int sdlograw_thread_main(int argc, char *argv[])
+{
+	if (sdlograw_file_exist(mountpoint) != OK) {
+		errx(1, "logging mount point %s not present, exiting.", mountpoint);
+	}
+
+	char folder_path[64];
+
+	if (sdlograw_create_logfolder(folder_path))
+		errx(1, "unable to create logging folder, exiting.");
+
+	/* string to hold the path to the sensorfile */
+	char path_buf[64] = "";
+
+	/* only print logging path, important to find log file later */
+	warnx("logging to directory %s\n", folder_path);
+
+	/* set up file path: e.g. /mnt/sdcard/log0001/log.bin */
+	sprintf(path_buf, "%s/%s.bin", folder_path, "dat");
+
+	if (0 == (sdlograw_file = open(path_buf, O_CREAT | O_WRONLY | O_DSYNC))) {
+		errx(1, "opening %s failed.\n", path_buf);
+	}
+
+	// init acceleration
+	int fd = open(ACCEL_DEVICE_PATH, 0);
+	if (fd < 0)
+	{
+		warn("%s", ACCEL_DEVICE_PATH);
+		errx(1, "FATAL: no accelerometer found");
+	}
+	else
+	{
+		/* set the accel internal sampling rate up to at leat 1000Hz */
+		ioctl(fd, ACCELIOCSSAMPLERATE, 1000);
+		/* set the driver to poll at 1000Hz */
+		ioctl(fd, SENSORIOCSPOLLRATE, 1000);
+		/* close file handle */
+		close(fd);
+	}
+	// init gyro
+	fd = open(GYRO_DEVICE_PATH, 0);
+	if (fd < 0)
+	{
+		warn("%s", GYRO_DEVICE_PATH);
+		errx(1, "FATAL: no gyro found");
+	}
+	else
+	{
+		/* set the accel internal sampling rate up to at leat 1000Hz */
+		ioctl(fd, GYROIOCSSAMPLERATE, 1000);
+		/* set the driver to poll at 1000Hz */
+		ioctl(fd, GYROIOCSSAMPLERATE, 1000);
+		/* close file handle */
+		close(fd);
+	}
+	// init magnetometer
+	fd = open(MAG_DEVICE_PATH, 0);
+	if (fd < 0)
+	{
+		warn("%s", MAG_DEVICE_PATH);
+		errx(1, "FATAL: no magnetometer found");
+	}
+	else
+	{
+		/* set the mag internal sampling rate up to at least 150 Hz */
+		ioctl(fd, MAGIOCSSAMPLERATE, 150);
+		/* set the pollrate accordingly */
+		ioctl(fd, SENSORIOCSPOLLRATE, 150);
+		/* close file handle */
+		close(fd);
+	}
+
+	int gyro_sub, accel_sub, mag_sub;
+
+	gyro_sub = orb_subscribe(ORB_ID(sensor_gyro));
+	accel_sub = orb_subscribe(ORB_ID(sensor_accel));
+	mag_sub = orb_subscribe(ORB_ID(sensor_mag));
+	orb_set_interval(gyro_sub, 1);
+	orb_set_interval(accel_sub, 1);
+	orb_set_interval(mag_sub, 1);
+
+	/* wakeup source(s) */
+	const ssize_t fdsc = 3;
+	struct pollfd fds[fdsc];
+	fds[sdlograw_datatype_gyro].fd      = gyro_sub;
+	fds[sdlograw_datatype_gyro].events  = POLLIN;
+	fds[sdlograw_datatype_accel].fd     = accel_sub;
+	fds[sdlograw_datatype_accel].events = POLLIN;
+	fds[sdlograw_datatype_mag].fd       = mag_sub;
+	fds[sdlograw_datatype_mag].events   = POLLIN;
+
+
+	struct sensor_combined_s raw;
+	memset(&raw, 0, sizeof(raw));
+
+	/* initialize log buffer with a size of 2 kbyte */
+	sdlograw_buffer_init(&lb, 4096);
+
+	/* initialize thread synchronization */
+	pthread_mutex_init(&logbuffer_mutex, NULL);
+  	pthread_cond_init(&logbuffer_cond, NULL);
+
+	/* start logbuffer emptying thread */
+	pthread_t sysvector_pthread = sdlograw_write_start_thread(&lb);
+
+	sdlograw_starttime = hrt_absolute_time();
+	int i = 0;
+	while (!thread_should_exit)
+	{
+		/* only poll for sensor_combined */
+		int poll_ret = poll(fds, fdsc, 1000);
+
+		/* handle the poll result */
+		if (poll_ret == 0) {
+			/* XXX this means none of our providers is giving us data - might be an error? */
+		} else if (poll_ret < 0) {
+			/* XXX this is seriously bad - should be an emergency */
+		} else {
+			int num_handled = 0;
+			num_handled += sdlograw_poll_gyro(&fds[sdlograw_datatype_gyro]);
+			num_handled += sdlograw_poll_accel(&fds[sdlograw_datatype_accel]);
+			num_handled += sdlograw_poll_mag(&fds[sdlograw_datatype_mag]);
+		}
+	}
+
+	sdlograw_print_status();
+
+	/* wake up write thread one last time */
+	pthread_mutex_lock(&logbuffer_mutex);
+	pthread_cond_signal(&logbuffer_cond);
+	/* unlock, now the writer thread may return */
+	pthread_mutex_unlock(&logbuffer_mutex);
+
+	/* wait for write thread to return */
+	(void)pthread_join(sysvector_pthread, NULL);
+
+  	pthread_mutex_destroy(&logbuffer_mutex);
+  	pthread_cond_destroy(&logbuffer_cond);
+
+	warnx("exiting.\n\n");
+
+	thread_running = false;
+
+	return 0;
+}
+#else
 int sdlograw_thread_main(int argc, char *argv[])
 {
 	if (sdlograw_file_exist(mountpoint) != OK) {
@@ -348,7 +602,7 @@ int sdlograw_thread_main(int argc, char *argv[])
 	thread_running = true;
 
 	/* initialize log buffer with a size of 2 kbyte */
-	sdlograw_buffer_init(&lb, 2048);
+	sdlograw_buffer_init(&lb, 4096);
 
 	/* initialize thread synchronization */
 	pthread_mutex_init(&logbuffer_mutex, NULL);
@@ -429,6 +683,7 @@ int sdlograw_thread_main(int argc, char *argv[])
 
 	return 0;
 }
+#endif
 
 void sdlograw_print_status()
 {
