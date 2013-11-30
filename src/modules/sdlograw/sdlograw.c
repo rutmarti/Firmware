@@ -56,23 +56,6 @@
 #include <unistd.h>
 #include <drivers/drv_hrt.h>
 
-#include <uORB/uORB.h>
-#include <uORB/topics/sensor_combined.h>
-#include <uORB/topics/vehicle_attitude.h>
-#include <uORB/topics/vehicle_attitude_setpoint.h>
-#include <uORB/topics/actuator_outputs.h>
-#include <uORB/topics/actuator_controls.h>
-#include <uORB/topics/actuator_controls_effective.h>
-#include <uORB/topics/vehicle_command.h>
-#include <uORB/topics/vehicle_local_position.h>
-#include <uORB/topics/vehicle_global_position.h>
-#include <uORB/topics/vehicle_gps_position.h>
-#include <uORB/topics/vehicle_vicon_position.h>
-#include <uORB/topics/optical_flow.h>
-#include <uORB/topics/battery_status.h>
-#include <uORB/topics/differential_pressure.h>
-#include <uORB/topics/airspeed.h>
-
 #include <systemlib/systemlib.h>
 
 #include <mavlink/mavlink_log.h>
@@ -250,7 +233,6 @@ static void *sdlograw_write_thread(void *arg)
 
 	struct sdlograw_buffer *logbuf = (struct sdlograw_buffer *)arg;
 
-	int poll_count = 0;
 	int not_sync_cnt = 0;
 
 	uint8_t buffer[512];
@@ -313,8 +295,6 @@ pthread_t sdlograw_write_start_thread(struct sdlograw_buffer *logbuf)
 	return thread;
 }
 
-#define NEW_RAWLOG
-#ifdef NEW_RAWLOG
 enum sdlograw_datatype
 {
 	sdlograw_datatype_gyro = 0,
@@ -536,6 +516,7 @@ int sdlograw_thread_main(int argc, char *argv[])
 	pthread_mutex_init(&logbuffer_mutex, NULL);
   	pthread_cond_init(&logbuffer_cond, NULL);
 
+  	thread_running = true;
 	/* start logbuffer emptying thread */
 	pthread_t sysvector_pthread = sdlograw_write_start_thread(&lb);
 
@@ -576,137 +557,6 @@ int sdlograw_thread_main(int argc, char *argv[])
 
 	return 0;
 }
-#else
-int sdlograw_thread_main(int argc, char *argv[])
-{
-	if (sdlograw_file_exist(mountpoint) != OK) {
-		errx(1, "logging mount point %s not present, exiting.", mountpoint);
-	}
-
-	char folder_path[64];
-
-	if (sdlograw_create_logfolder(folder_path))
-		errx(1, "unable to create logging folder, exiting.");
-
-	/* string to hold the path to the sensorfile */
-	char path_buf[64] = "";
-
-	/* only print logging path, important to find log file later */
-	warnx("logging to directory %s\n", folder_path);
-
-	/* set up file path: e.g. /mnt/sdcard/log0001/log.bin */
-	sprintf(path_buf, "%s/%s.bin", folder_path, "dat");
-
-	if (0 == (sdlograw_file = open(path_buf, O_CREAT | O_WRONLY | O_DSYNC))) {
-		errx(1, "opening %s failed.\n", path_buf);
-	}
-
-	/* --- IMPORTANT: DEFINE NUMBER OF ORB STRUCTS TO WAIT FOR HERE --- */
-	/* number of messages */
-	const ssize_t fdsc = 1;
-	/* Sanity check variable and index */
-	ssize_t fdsc_count = 0;
-	/* file descriptors to wait for */
-	struct pollfd fds[fdsc];
-
-
-	struct sensor_combined_s raw;
-	memset(&raw, 0, sizeof(raw));
-
-	int sensor_sub;
-
-	/* --- SENSORS RAW VALUE --- */
-	/* subscribe to ORB for sensors raw */
-	sensor_sub = orb_subscribe(ORB_ID(sensor_combined));
-	fds[fdsc_count].fd = sensor_sub;
-	/* do not rate limit, instead use skip counter (aliasing on rate limit) */
-	fds[fdsc_count].events = POLLIN;
-
-	thread_running = true;
-
-	/* initialize log buffer with a size of 2 kbyte */
-	sdlograw_buffer_init(&lb, 4096);
-
-	/* initialize thread synchronization */
-	pthread_mutex_init(&logbuffer_mutex, NULL);
-  	pthread_cond_init(&logbuffer_cond, NULL);
-
-	/* start logbuffer emptying thread */
-	pthread_t sysvector_pthread = sdlograw_write_start_thread(&lb);
-
-	sdlograw_starttime = hrt_absolute_time();
-
-	while (!thread_should_exit) {
-
-		/* only poll for sensor_combined */
-		int poll_ret = poll(fds, 1, 1000);
-
-		/* handle the poll result */
-		if (poll_ret == 0) {
-			/* XXX this means none of our providers is giving us data - might be an error? */
-		} else if (poll_ret < 0) {
-			/* XXX this is seriously bad - should be an emergency */
-		} else {
-
-			int ifds = 0;
-
-			/* --- SENSORS RAW VALUE --- */
-			if (fds[ifds++].revents & POLLIN) {
-
-				// /* copy sensors raw data into local buffer */
-				// orb_copy(ORB_ID(sensor_combined), subs.sensor_sub, &buf.raw);
-				// /* write out */
-				// sensor_combined_bytes += write(sensorfile, (const char*)&(buf.raw), sizeof(buf.raw));
-
-				/* always copy sensors raw data into local buffer, since poll flags won't clear else */
-				orb_copy(ORB_ID(sensor_combined), sensor_sub, &raw);
-
-				struct sdlog_sensVect sensors;
-				memcpy(sensors.accel, raw.accelerometer_raw, sizeof(raw.accelerometer_raw));
-				memcpy(sensors.gyro, raw.gyro_raw, sizeof(raw.gyro_raw));
-				memcpy(sensors.mag, raw.magnetometer_raw, sizeof(raw.magnetometer_raw));
-
-				sensors.tstamp = (uint32_t)raw.timestamp;
-				sensors.frameStart = 0x77;
-				sensors.frameStop = 0xaa;
-
-				/* put into buffer for later IO */
-				pthread_mutex_lock(&logbuffer_mutex);
-				sdlograw_buffer_write(&lb, (uint8_t *)&sensors, sizeof(sensors));
-				/* signal the other thread new data, but not yet unlock */
-				if (sdlograw_buffer_cur_size(&lb) >= 512) {
-					/* only request write if several packets can be written at once */
-					pthread_cond_signal(&logbuffer_cond);
-				}
-				/* unlock, now the writer thread may run */
-				pthread_mutex_unlock(&logbuffer_mutex);
-			}
-
-		}
-
-	}
-
-	sdlograw_print_status();
-
-	/* wake up write thread one last time */
-	pthread_mutex_lock(&logbuffer_mutex);
-	pthread_cond_signal(&logbuffer_cond);
-	/* unlock, now the writer thread may return */
-	pthread_mutex_unlock(&logbuffer_mutex);
-
-	/* wait for write thread to return */
-	(void)pthread_join(sysvector_pthread, NULL);
-
-  	pthread_mutex_destroy(&logbuffer_mutex);
-  	pthread_cond_destroy(&logbuffer_cond);
-
-	warnx("exiting.\n\n");
-
-	thread_running = false;
-
-	return 0;
-}
-#endif
 
 void sdlograw_print_status()
 {
