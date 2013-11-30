@@ -51,11 +51,10 @@ struct sdlograw_buffer {
 
 #pragma pack(push, 1)
 struct sdlog_sensVect {
-	uint8_t frameStart;
+	uint32_t frameStart;
 	uint32_t tstamp;
 	int16_t data[3];
 	int16_t temp;
-	uint8_t frameStop;
 };
 #pragma pack(pop)
 

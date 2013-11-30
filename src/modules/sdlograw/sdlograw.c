@@ -178,7 +178,7 @@ int sdlograw_main(int argc, char *argv[])
 		thread_should_exit = false;
 		deamon_task = task_spawn_cmd("sdlograw",
 					 SCHED_DEFAULT,
-					 SCHED_PRIORITY_MAX - 80,
+					 SCHED_PRIORITY_DEFAULT,
 					 4096,
 					 sdlograw_thread_main,
 					 (const char **)argv);
@@ -338,73 +338,112 @@ static void sdlograw_write_buffer(uint8_t *pData, uint32_t dataSize)
 	pthread_mutex_unlock(&logbuffer_mutex);
 }
 
-static int sdlograw_poll_gyro(struct pollfd *pFd)
+static int sdlograw_poll_gyro(int fh)
 {
-	if (pFd->revents & POLLIN)
+	struct gyro_report report[15];
+	struct sdlog_sensVect logData[15];
+	ssize_t readSize;
+	uint32_t writeSize, i, numDat;
+
+	// get data from file handle
+	readSize = read(fh, (void *)report, sizeof(report));
+
+	if (readSize <= 0)
 	{
-		struct gyro_report report;
-		struct sdlog_sensVect logData;
-
-		orb_copy(ORB_ID(sensor_gyro), pFd->fd, &report);
-		logData.tstamp  = (uint32_t)(report.timestamp - sdlograw_starttime);
-		logData.data[0] = report.x_raw;
-		logData.data[1] = report.y_raw;
-		logData.data[2] = report.z_raw;
-		logData.temp    = report.temperature_raw;
-
-		logData.frameStart = 0xa0 | sdlograw_datatype_gyro;
-		logData.frameStop  = logData.frameStart;
-
-		sdlograw_write_buffer((uint8_t*)&logData, sizeof(logData));
-		return 1;
+		return readSize;
 	}
-	return 0;
+	numDat = (uint32_t)readSize / sizeof(struct mag_report);
+
+	// convert into output format
+	for (i = 0; i < numDat; i++)
+	{
+		struct sdlog_sensVect *pLog = &logData[i];
+		struct gyro_report *pRep = &report[i];
+		pLog->tstamp  = (uint32_t)(pRep->timestamp - sdlograw_starttime);
+		pLog->data[0] = pRep->x_raw;
+		pLog->data[1] = pRep->y_raw;
+		pLog->data[2] = pRep->z_raw;
+		pLog->temp    = pRep->temperature_raw;
+
+		pLog->frameStart = 0xabc0 | sdlograw_datatype_gyro;
+
+	}
+
+	// copy into buffer
+	writeSize = numDat * sizeof(struct sdlog_sensVect);
+	sdlograw_write_buffer((uint8_t*)&logData, writeSize);
+	return numDat;
 }
 
-static int sdlograw_poll_accel(struct pollfd *pFd)
+static int sdlograw_poll_accel(int fh)
 {
-	if (pFd->revents & POLLIN)
+	struct accel_report report[15];
+	struct sdlog_sensVect logData[15];
+	ssize_t readSize;
+	uint32_t writeSize, i, numDat;
+
+	// get data from file handle
+	readSize = read(fh, (void *)report, sizeof(report));
+
+	if (readSize <= 0)
 	{
-		struct accel_report report;
-		struct sdlog_sensVect logData;
-
-		orb_copy(ORB_ID(sensor_accel), pFd->fd, &report);
-		logData.tstamp  = (uint32_t)(report.timestamp - sdlograw_starttime);
-		logData.data[0] = report.x_raw;
-		logData.data[1] = report.y_raw;
-		logData.data[2] = report.z_raw;
-		logData.temp    = report.temperature_raw;
-
-		logData.frameStart = 0xa0 | sdlograw_datatype_accel;
-		logData.frameStop  = logData.frameStart;
-
-		sdlograw_write_buffer((uint8_t*)&logData, sizeof(logData));
-		return 1;
+		return readSize;
 	}
-	return 0;
+	numDat = (uint32_t)readSize / sizeof(struct mag_report);
+
+	// convert into output format
+	for (i = 0; i < numDat; i++)
+	{
+		struct sdlog_sensVect *pLog = &logData[i];
+		struct accel_report *pRep = &report[i];
+		pLog->tstamp  = (uint32_t)(pRep->timestamp - sdlograw_starttime);
+		pLog->data[0] = pRep->x_raw;
+		pLog->data[1] = pRep->y_raw;
+		pLog->data[2] = pRep->z_raw;
+		pLog->temp    = pRep->temperature_raw;
+
+		pLog->frameStart = 0xabc0 | sdlograw_datatype_accel;
+	}
+
+	writeSize = numDat * sizeof(struct sdlog_sensVect);
+	sdlograw_write_buffer((uint8_t*)&logData, writeSize);
+	return numDat;
 }
 
-static int sdlograw_poll_mag(struct pollfd *pFd)
+static int sdlograw_poll_mag(int fh)
 {
-	if (pFd->revents & POLLIN)
+	struct mag_report report[5];
+	struct sdlog_sensVect logData[5];
+	ssize_t readSize;
+	uint32_t writeSize, i, numDat;
+
+	// get data from file handle
+	readSize = read(fh, (void *)report, sizeof(report));
+
+	if (readSize <= 0)
 	{
-		struct mag_report report;
-		struct sdlog_sensVect logData;
-
-		orb_copy(ORB_ID(sensor_mag), pFd->fd, &report);
-		logData.tstamp  = (uint32_t)(report.timestamp - sdlograw_starttime);
-		logData.data[0] = report.x_raw;
-		logData.data[1] = report.y_raw;
-		logData.data[2] = report.z_raw;
-		logData.temp    = 0;
-
-		logData.frameStart = 0xa0 | sdlograw_datatype_mag;
-		logData.frameStop  = logData.frameStart;
-
-		sdlograw_write_buffer((uint8_t*)&logData, sizeof(logData));
-		return 1;
+		return readSize;
 	}
-	return 0;
+	numDat = (uint32_t)readSize / sizeof(struct mag_report);
+
+	// convert into output format
+	for (i = 0; i < numDat; i++)
+	{
+		struct sdlog_sensVect *pLog = &logData[i];
+		struct mag_report *pRep = &report[i];
+		pLog->tstamp  = (uint32_t)(pRep->timestamp - sdlograw_starttime);
+		pLog->data[0] = pRep->x_raw;
+		pLog->data[1] = pRep->y_raw;
+		pLog->data[2] = pRep->z_raw;
+		pLog->temp    = 0;
+
+		pLog->frameStart = 0xabc0 | sdlograw_datatype_mag;
+	}
+
+	// copy into buffer
+	writeSize = numDat * sizeof(struct sdlog_sensVect);
+	sdlograw_write_buffer((uint8_t*)&logData, writeSize);
+	return numDat;
 }
 
 int sdlograw_thread_main(int argc, char *argv[])
@@ -432,78 +471,65 @@ int sdlograw_thread_main(int argc, char *argv[])
 	}
 
 	// init acceleration
-	int fd = open(ACCEL_DEVICE_PATH, 0);
-	if (fd < 0)
+	int fdAccel, fdGyro, fdMag;
+	fdAccel = open(ACCEL_DEVICE_PATH, O_RDONLY);
+	if (fdAccel < 0)
 	{
 		warn("%s", ACCEL_DEVICE_PATH);
 		errx(1, "FATAL: no accelerometer found");
 	}
 	else
 	{
+		/* increase sensor buffer */
+		ioctl(fdAccel, SENSORIOCSQUEUEDEPTH, 15);
 		/* set the accel internal sampling rate up to at leat 1000Hz */
-		ioctl(fd, ACCELIOCSSAMPLERATE, 1000);
+		ioctl(fdAccel, ACCELIOCSSAMPLERATE, 1000);
 		/* set the driver to poll at 1000Hz */
-		ioctl(fd, SENSORIOCSPOLLRATE, 1000);
-		/* close file handle */
-		close(fd);
+		ioctl(fdAccel, SENSORIOCSPOLLRATE, 1000);
+		warnx("pollrate set");
 	}
+
+	warnx("accel init");
+
 	// init gyro
-	fd = open(GYRO_DEVICE_PATH, 0);
-	if (fd < 0)
+	fdGyro = open(GYRO_DEVICE_PATH, O_RDONLY);
+	if (fdGyro < 0)
 	{
 		warn("%s", GYRO_DEVICE_PATH);
 		errx(1, "FATAL: no gyro found");
 	}
 	else
 	{
+		/* increase sensor buffer */
+		ioctl(fdGyro, SENSORIOCSQUEUEDEPTH, 15);
 		/* set the accel internal sampling rate up to at leat 1000Hz */
-		ioctl(fd, GYROIOCSSAMPLERATE, 1000);
+		ioctl(fdGyro, GYROIOCSSAMPLERATE, 1000);
 		/* set the driver to poll at 1000Hz */
-		ioctl(fd, GYROIOCSSAMPLERATE, 1000);
-		/* close file handle */
-		close(fd);
+		ioctl(fdGyro, SENSORIOCSPOLLRATE, 1000);
 	}
+
+	warnx("gyro init");
+
 	// init magnetometer
-	fd = open(MAG_DEVICE_PATH, 0);
-	if (fd < 0)
+	fdMag = open(MAG_DEVICE_PATH, O_RDONLY);
+	if (fdMag < 0)
 	{
 		warn("%s", MAG_DEVICE_PATH);
 		errx(1, "FATAL: no magnetometer found");
 	}
 	else
 	{
-		/* set the mag internal sampling rate up to at least 150 Hz */
-		ioctl(fd, MAGIOCSSAMPLERATE, 150);
+		/* increase sensor buffer */
+		ioctl(fdMag, SENSORIOCSQUEUEDEPTH, 15);
 		/* set the pollrate accordingly */
-		ioctl(fd, SENSORIOCSPOLLRATE, 150);
-		/* close file handle */
-		close(fd);
+		ioctl(fdMag, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT);
 	}
 
-	int gyro_sub, accel_sub, mag_sub;
+	warnx("mag init");
 
-	gyro_sub = orb_subscribe(ORB_ID(sensor_gyro));
-	accel_sub = orb_subscribe(ORB_ID(sensor_accel));
-	mag_sub = orb_subscribe(ORB_ID(sensor_mag));
-	orb_set_interval(gyro_sub, 1);
-	orb_set_interval(accel_sub, 1);
-	orb_set_interval(mag_sub, 1);
+	//return 0;
 
-	/* wakeup source(s) */
-	const ssize_t fdsc = 3;
-	struct pollfd fds[fdsc];
-	fds[sdlograw_datatype_gyro].fd      = gyro_sub;
-	fds[sdlograw_datatype_gyro].events  = POLLIN;
-	fds[sdlograw_datatype_accel].fd     = accel_sub;
-	fds[sdlograw_datatype_accel].events = POLLIN;
-	fds[sdlograw_datatype_mag].fd       = mag_sub;
-	fds[sdlograw_datatype_mag].events   = POLLIN;
-
-
-	struct sensor_combined_s raw;
-	memset(&raw, 0, sizeof(raw));
-
-	/* initialize log buffer with a size of 2 kbyte */
+	/* initialize log buffer with a size of 4 kbyte */
 	sdlograw_buffer_init(&lb, 4096);
 
 	/* initialize thread synchronization */
@@ -513,24 +539,16 @@ int sdlograw_thread_main(int argc, char *argv[])
 	/* start logbuffer emptying thread */
 	pthread_t sysvector_pthread = sdlograw_write_start_thread(&lb);
 
+	warnx("Init done");
 	sdlograw_starttime = hrt_absolute_time();
-	int i = 0;
 	while (!thread_should_exit)
 	{
-		/* only poll for sensor_combined */
-		int poll_ret = poll(fds, fdsc, 1000);
-
-		/* handle the poll result */
-		if (poll_ret == 0) {
-			/* XXX this means none of our providers is giving us data - might be an error? */
-		} else if (poll_ret < 0) {
-			/* XXX this is seriously bad - should be an emergency */
-		} else {
-			int num_handled = 0;
-			num_handled += sdlograw_poll_gyro(&fds[sdlograw_datatype_gyro]);
-			num_handled += sdlograw_poll_accel(&fds[sdlograw_datatype_accel]);
-			num_handled += sdlograw_poll_mag(&fds[sdlograw_datatype_mag]);
-		}
+		int num_handled = 0;
+		usleep(10000);
+		num_handled += sdlograw_poll_gyro(fdGyro);
+		num_handled += sdlograw_poll_accel(fdAccel);
+		num_handled = sdlograw_poll_mag(fdMag);
+		//warnx("num %d", num_handled);
 	}
 
 	sdlograw_print_status();
@@ -540,6 +558,11 @@ int sdlograw_thread_main(int argc, char *argv[])
 	pthread_cond_signal(&logbuffer_cond);
 	/* unlock, now the writer thread may return */
 	pthread_mutex_unlock(&logbuffer_mutex);
+
+	/* close file handles */
+	close(fdAccel);
+	close(fdGyro);
+	close(fdMag);
 
 	/* wait for write thread to return */
 	(void)pthread_join(sysvector_pthread, NULL);

@@ -91,6 +91,7 @@ MODULES		+= examples/flow_speed_control
 # Logging
 #
 MODULES		+= modules/sdlog2
+MODULES		+= modules/sdlograw
 
 #
 # Unit tests
