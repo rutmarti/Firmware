@@ -302,6 +302,8 @@ enum sdlograw_datatype
 	sdlograw_datatype_mag
 };
 
+#define BUFFER_SIZE 25
+
 static void sdlograw_write_buffer(uint8_t *pData, uint32_t dataSize)
 {
 	/* put into buffer for later IO */
@@ -320,8 +322,8 @@ static void sdlograw_write_buffer(uint8_t *pData, uint32_t dataSize)
 
 static int sdlograw_poll_gyro(int fh)
 {
-	struct gyro_report report[15];
-	struct sdlog_sensVect logData[15];
+	struct gyro_report report[BUFFER_SIZE];
+	struct sdlog_sensVect logData[BUFFER_SIZE];
 	ssize_t readSize;
 	uint32_t writeSize, i, numDat;
 
@@ -357,8 +359,8 @@ static int sdlograw_poll_gyro(int fh)
 
 static int sdlograw_poll_accel(int fh)
 {
-	struct accel_report report[15];
-	struct sdlog_sensVect logData[15];
+	struct accel_report report[BUFFER_SIZE];
+	struct sdlog_sensVect logData[BUFFER_SIZE];
 	ssize_t readSize;
 	uint32_t writeSize, i, numDat;
 
@@ -461,7 +463,7 @@ int sdlograw_thread_main(int argc, char *argv[])
 	else
 	{
 		/* increase sensor buffer */
-		ioctl(fdAccel, SENSORIOCSQUEUEDEPTH, 15);
+		ioctl(fdAccel, SENSORIOCSQUEUEDEPTH, BUFFER_SIZE);
 		/* set the accel internal sampling rate up to at leat 1000Hz */
 		ioctl(fdAccel, ACCELIOCSSAMPLERATE, 1000);
 		/* set the driver to poll at 1000Hz */
@@ -481,7 +483,7 @@ int sdlograw_thread_main(int argc, char *argv[])
 	else
 	{
 		/* increase sensor buffer */
-		ioctl(fdGyro, SENSORIOCSQUEUEDEPTH, 15);
+		ioctl(fdGyro, SENSORIOCSQUEUEDEPTH, BUFFER_SIZE);
 		/* set the accel internal sampling rate up to at leat 1000Hz */
 		ioctl(fdGyro, GYROIOCSSAMPLERATE, 1000);
 		/* set the driver to poll at 1000Hz */
@@ -500,7 +502,7 @@ int sdlograw_thread_main(int argc, char *argv[])
 	else
 	{
 		/* increase sensor buffer */
-		ioctl(fdMag, SENSORIOCSQUEUEDEPTH, 15);
+		ioctl(fdMag, SENSORIOCSQUEUEDEPTH, BUFFER_SIZE);
 		/* set the pollrate accordingly */
 		ioctl(fdMag, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT);
 	}
